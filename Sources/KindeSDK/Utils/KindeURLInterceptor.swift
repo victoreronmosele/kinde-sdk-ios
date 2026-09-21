@@ -21,14 +21,34 @@ enum KindeURLInterceptor {
     public static func startInterceptingURLs(with urlHandler: @escaping (URL) -> Bool) {
         self.onURLReceived = urlHandler
 
+        // 1. Attempt immediate swizzling for currently available classes
         let sceneClasses = findSceneDelegateClasses()
+        
         for delegateClass in sceneClasses {
             swizzleSceneOpenURLContexts(on: delegateClass)
             swizzleSceneContinueUserActivity(on: delegateClass)
             swizzleSceneWillConnectToSession(on: delegateClass)
         }
+        
         swizzleApplicationOpenURLOptions()
         swizzleApplicationContinueUserActivity()
+        
+        // 2. Retry when scenes dynamically connect (fixes SwiftUI cold-starts)
+        NotificationCenter.default.addObserver(forName: UIScene.willConnectNotification, object: nil, queue: .main) { notification in
+            guard let scene = notification.object as? UIScene,
+                  let delegate = scene.delegate,
+                  let delegateClass = object_getClass(delegate) else { return }
+            
+            swizzleSceneOpenURLContexts(on: delegateClass)
+            swizzleSceneContinueUserActivity(on: delegateClass)
+            swizzleSceneWillConnectToSession(on: delegateClass)
+        }
+        
+        // 3. Retry when application finishes launching (fixes missing AppDelegate at init time)
+        NotificationCenter.default.addObserver(forName: UIApplication.didFinishLaunchingNotification, object: nil, queue: .main) { _ in
+            swizzleApplicationOpenURLOptions()
+            swizzleApplicationContinueUserActivity()
+        }
     }
 
     private static func findSceneDelegateClasses() -> [AnyClass] {
