@@ -174,15 +174,15 @@ public extension KindeSDKAPI {
         
         let queryItems = incomingUrlComponents.queryItems ?? []
         
-        if let invitationCode = queryItems.first(where: { $0.name == "invitation_code" })?.value {
-            if let auth = KindeSDKAPI.auth {
-                Task {
-                    try? await auth.login(invitationCode: invitationCode, prompt: Prompt.create)
-                }
-            }
-            return true
-        } else {
+        guard let invitationCode = queryItems.first(where: { $0.name == "invitation_code" })?.value,
+              !invitationCode.isEmpty,
+              let auth = KindeSDKAPI.auth else {
             return false
         }
+        
+        Task {
+            try? await auth.login(invitationCode: invitationCode, prompt: .create)
+        }
+        return true
     }
 }
