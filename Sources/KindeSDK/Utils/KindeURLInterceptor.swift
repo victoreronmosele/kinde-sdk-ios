@@ -14,10 +14,11 @@ enum KindeURLInterceptor {
     private static var swizzledSceneWillConnectToSessionClasses: Set<String> = []
     private static var swizzledSceneContinueUserActivityClasses: Set<String> = []
 
-    /// Callback to be triggered when a URL is intercepted.
-    static var onURLReceived: ((URL) -> Void)?
+    /// The closure invoked when a URL is intercepted.
+    /// It must return `true` if the SDK successfully consumed the URL, or `false` otherwise.
+    static var onURLReceived: ((URL) -> Bool)?
     
-    public static func startInterceptingURLs(with urlHandler: @escaping (URL) -> Void) {
+    public static func startInterceptingURLs(with urlHandler: @escaping (URL) -> Bool) {
         self.onURLReceived = urlHandler
 
         let sceneClasses = findSceneDelegateClasses()
@@ -70,7 +71,7 @@ enum KindeURLInterceptor {
 
     /// Safely replaces an iOS lifecycle method with Kinde's URL-handling logic, 
     /// while preserving the developer's original code so it can run afterwards.
-    static func swizzle(_ originalSelector: Selector, on delegateClass: AnyClass, with kindeSelector: Selector, onSuccess: () -> Void) {
+    static func swizzle(_ originalSelector: Selector, on delegateClass: AnyClass, with kindeSelector: Selector, dummySelector: Selector, onSuccess: () -> Void) {
         // Get the Kinde logic implementation from our extension
         guard let kindeMethod = class_getInstanceMethod(UIResponder.self, kindeSelector) else { return }
 
@@ -85,7 +86,7 @@ enum KindeURLInterceptor {
         } else {
             // Method is completely missing.
             // Point the internal kinde name to a dummy method to stop any potential loop.
-            let dummyMethod = class_getInstanceMethod(UIResponder.self, #selector(UIResponder.kinde_dummy))!
+            let dummyMethod = class_getInstanceMethod(UIResponder.self, dummySelector)!
             let dummyImplementation = method_getImplementation(dummyMethod)
             let dummyTypeEncoding = method_getTypeEncoding(dummyMethod)
             class_addMethod(delegateClass, kindeSelector, dummyImplementation, dummyTypeEncoding)
@@ -116,7 +117,7 @@ enum KindeURLInterceptor {
         let openURLSelector = #selector(UIApplicationDelegate.application(_:open:options:))
         let kindeOpenURLSelector = #selector(UIResponder.kinde_application(_:open:options:))
         
-        swizzle(openURLSelector, on: delegateClass, with: kindeOpenURLSelector) {
+        swizzle(openURLSelector, on: delegateClass, with: kindeOpenURLSelector, dummySelector: #selector(UIResponder.kinde_dummy_bool)) {
             didSwizzleApplicationOpenURLOptions = true
         }
     }
@@ -129,7 +130,7 @@ enum KindeURLInterceptor {
         let continueUserActivitySelector = #selector(UIApplicationDelegate.application(_:continue:restorationHandler:))
         let kindeContinueUserActivitySelector = #selector(UIResponder.kinde_application(_:continue:restorationHandler:))
         
-        swizzle(continueUserActivitySelector, on: delegateClass, with: kindeContinueUserActivitySelector) {
+        swizzle(continueUserActivitySelector, on: delegateClass, with: kindeContinueUserActivitySelector, dummySelector: #selector(UIResponder.kinde_dummy_bool)) {
             didSwizzleApplicationContinueUserActivity = true
         }
     }
@@ -141,7 +142,7 @@ enum KindeURLInterceptor {
         let sceneOpenURLSelector = #selector(UISceneDelegate.scene(_:openURLContexts:))
         let kindeSceneOpenURLSelector = #selector(UIResponder.kinde_scene(_:openURLContexts:))
         
-        swizzle(sceneOpenURLSelector, on: delegateClass, with: kindeSceneOpenURLSelector) {
+        swizzle(sceneOpenURLSelector, on: delegateClass, with: kindeSceneOpenURLSelector, dummySelector: #selector(UIResponder.kinde_dummy_void)) {
             swizzledSceneOpenURLContextsClasses.insert(className)
         }
     }
@@ -153,7 +154,7 @@ enum KindeURLInterceptor {
         let sceneContinueUserActivitySelector = #selector(UISceneDelegate.scene(_:continue:))
         let kindeSceneContinueUserActivitySelector = #selector(UIResponder.kinde_scene(_:continue:))
         
-        swizzle(sceneContinueUserActivitySelector, on: delegateClass, with: kindeSceneContinueUserActivitySelector) {
+        swizzle(sceneContinueUserActivitySelector, on: delegateClass, with: kindeSceneContinueUserActivitySelector, dummySelector: #selector(UIResponder.kinde_dummy_void)) {
             swizzledSceneContinueUserActivityClasses.insert(className)
         }
     }
@@ -165,7 +166,7 @@ enum KindeURLInterceptor {
         let sceneWillConnectSelector = #selector(UISceneDelegate.scene(_:willConnectTo:options:))
         let kindeSceneWillConnectSelector = #selector(UIResponder.kinde_scene(_:willConnectTo:options:))
         
-        swizzle(sceneWillConnectSelector, on: delegateClass, with: kindeSceneWillConnectSelector) {
+        swizzle(sceneWillConnectSelector, on: delegateClass, with: kindeSceneWillConnectSelector, dummySelector: #selector(UIResponder.kinde_dummy_void)) {
             swizzledSceneWillConnectToSessionClasses.insert(className)
         }
     }
@@ -175,31 +176,45 @@ enum KindeURLInterceptor {
 /// Kinde's injected URL handling logic. These methods take over the system callbacks,
 /// process the Kinde authentication URL, and then pass control back to the app.
 extension UIResponder {
-    /// A dummy method used to terminate forwarding loops for injected methods.
-    @objc func kinde_dummy() {}
+    /// Dummy method used to terminate forwarding loops when the host app does not implement the target Void delegate method.
+    @objc func kinde_dummy_void() {}
+    
+    /// Dummy method used to terminate forwarding loops when the host app does not implement the target Bool delegate method.
+    /// Returns `false` to explicitly inform iOS that the fallback handler did not consume the URL.
+    @objc func kinde_dummy_bool() -> Bool { return false }
 
     @objc func kinde_application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any]) -> Bool {
-        KindeURLInterceptor.onURLReceived?(url)
+        let handledByKinde = KindeURLInterceptor.onURLReceived?(url) ?? false
+        if handledByKinde { return true }
         return self.kinde_application(app, open: url, options: options)
     }
 
     @objc func kinde_application(_ app: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
         if userActivity.activityType == NSUserActivityTypeBrowsingWeb, let url = userActivity.webpageURL {
-            KindeURLInterceptor.onURLReceived?(url)
+            let handledByKinde = KindeURLInterceptor.onURLReceived?(url) ?? false
+            if handledByKinde { return true }
         }
         return self.kinde_application(app, continue: userActivity, restorationHandler: restorationHandler)
     }
 
     @objc func kinde_scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        var unhandledContexts = URLContexts
+        
         for context in URLContexts {
-            KindeURLInterceptor.onURLReceived?(context.url)
+            if KindeURLInterceptor.onURLReceived?(context.url) == true {
+                unhandledContexts.remove(context)
+            }
         }
-        self.kinde_scene(scene, openURLContexts: URLContexts)
+        
+        if !unhandledContexts.isEmpty {
+            self.kinde_scene(scene, openURLContexts: unhandledContexts)
+        }
     }
 
     @objc func kinde_scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
         if userActivity.activityType == NSUserActivityTypeBrowsingWeb, let url = userActivity.webpageURL {
-            KindeURLInterceptor.onURLReceived?(url)
+            let handledByKinde = KindeURLInterceptor.onURLReceived?(url) ?? false
+            if handledByKinde { return } 
         }
         self.kinde_scene(scene, continue: userActivity)
     }
