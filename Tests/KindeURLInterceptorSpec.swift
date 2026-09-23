@@ -49,13 +49,14 @@ class KindeURLInterceptorSpec: QuickSpec {
                 var receivedURL: URL?
                 KindeURLInterceptor.onURLReceived = { url in
                     receivedURL = url
+                    return true
                 }
                 
                 let originalSelector = #selector(UIApplicationDelegate.application(_:open:options:))
                 let kindeSelector = #selector(UIResponder.kinde_application(_:open:options:))
                 
                 var successCalled = false
-                KindeURLInterceptor.swizzle(originalSelector, on: type(of: mockDelegate), with: kindeSelector) {
+                KindeURLInterceptor.swizzle(originalSelector, on: type(of: mockDelegate), with: kindeSelector, dummySelector: #selector(UIResponder.kinde_dummy_bool)) {
                     successCalled = true
                 }
                 
@@ -67,6 +68,29 @@ class KindeURLInterceptorSpec: QuickSpec {
                 
                 expect(receivedURL).to(equal(testURL))
                 
+                expect(mockDelegate.originalOpenURLCalled).to(beFalse())
+                expect(result).to(beTrue())
+            }
+            
+            it("swizzles application(_:open:options:) successfully but passes unhandled URLs to original delegate") {
+                let mockDelegate = MockAppDelegate()
+                
+                var receivedURL: URL?
+                KindeURLInterceptor.onURLReceived = { url in
+                    receivedURL = url
+                    return false
+                }
+                
+                let originalSelector = #selector(UIApplicationDelegate.application(_:open:options:))
+                let kindeSelector = #selector(UIResponder.kinde_application(_:open:options:))
+                
+                KindeURLInterceptor.swizzle(originalSelector, on: type(of: mockDelegate), with: kindeSelector, dummySelector: #selector(UIResponder.kinde_dummy_bool)) {}
+                
+                let testURL = URL(string: "other://callback")!
+                
+                let result = mockDelegate.application(UIApplication.shared, open: testURL, options: [:])
+                
+                expect(receivedURL).to(equal(testURL))
                 expect(mockDelegate.originalOpenURLCalled).to(beTrue())
                 expect(result).to(beTrue())
             }
@@ -77,19 +101,45 @@ class KindeURLInterceptorSpec: QuickSpec {
                 var receivedURL: URL?
                 KindeURLInterceptor.onURLReceived = { url in
                     receivedURL = url
+                    return true
                 }
                 
                 let originalSelector = #selector(UIApplicationDelegate.application(_:continue:restorationHandler:))
                 let kindeSelector = #selector(UIResponder.kinde_application(_:continue:restorationHandler:))
                 
                 var successCalled = false
-                KindeURLInterceptor.swizzle(originalSelector, on: type(of: mockDelegate), with: kindeSelector) {
+                KindeURLInterceptor.swizzle(originalSelector, on: type(of: mockDelegate), with: kindeSelector, dummySelector: #selector(UIResponder.kinde_dummy_bool)) {
                     successCalled = true
                 }
                 
                 expect(successCalled).to(beTrue())
                 
                 let testURL = URL(string: "https://yourdomain.kinde.com/callback")!
+                let userActivity = NSUserActivity(activityType: NSUserActivityTypeBrowsingWeb)
+                userActivity.webpageURL = testURL
+                
+                let result = mockDelegate.application(UIApplication.shared, continue: userActivity, restorationHandler: { _ in })
+                
+                expect(receivedURL).to(equal(testURL))
+                expect(mockDelegate.originalContinueUserActivityCalled).to(beFalse())
+                expect(result).to(beTrue())
+            }
+
+            it("swizzles application(_:continue:restorationHandler:) successfully but passes unhandled links to original delegate") {
+                let mockDelegate = MockAppDelegate()
+                
+                var receivedURL: URL?
+                KindeURLInterceptor.onURLReceived = { url in
+                    receivedURL = url
+                    return false
+                }
+                
+                let originalSelector = #selector(UIApplicationDelegate.application(_:continue:restorationHandler:))
+                let kindeSelector = #selector(UIResponder.kinde_application(_:continue:restorationHandler:))
+                
+                KindeURLInterceptor.swizzle(originalSelector, on: type(of: mockDelegate), with: kindeSelector, dummySelector: #selector(UIResponder.kinde_dummy_bool)) {}
+                
+                let testURL = URL(string: "https://yourdomain.kinde.com/other-callback")!
                 let userActivity = NSUserActivity(activityType: NSUserActivityTypeBrowsingWeb)
                 userActivity.webpageURL = testURL
                 
@@ -107,19 +157,49 @@ class KindeURLInterceptorSpec: QuickSpec {
                 var receivedURL: URL?
                 KindeURLInterceptor.onURLReceived = { url in
                     receivedURL = url
+                    return true
                 }
                 
                 let originalSelector = #selector(UISceneDelegate.scene(_:continue:))
                 let kindeSelector = #selector(UIResponder.kinde_scene(_:continue:))
                 
                 var successCalled = false
-                KindeURLInterceptor.swizzle(originalSelector, on: type(of: mockDelegate), with: kindeSelector) {
+                KindeURLInterceptor.swizzle(originalSelector, on: type(of: mockDelegate), with: kindeSelector, dummySelector: #selector(UIResponder.kinde_dummy_void)) {
                     successCalled = true
                 }
                 
                 expect(successCalled).to(beTrue())
                 
                 let testURL = URL(string: "https://yourdomain.kinde.com/scene-callback")!
+                
+                let userActivity = NSUserActivity(activityType: NSUserActivityTypeBrowsingWeb)
+                userActivity.webpageURL = testURL
+                
+                let sceneClass: AnyClass = NSClassFromString("UIScene")!
+                let allocScene = (sceneClass as AnyObject).perform(NSSelectorFromString("alloc"))?.takeUnretainedValue()
+                let realScene = allocScene?.perform(NSSelectorFromString("init"))?.takeUnretainedValue() as! UIScene
+                
+                mockDelegate.perform(#selector(MockSceneDelegate.scene(_:continue:)), with: realScene, with: userActivity)
+                
+                expect(receivedURL).to(equal(testURL))
+                expect(mockDelegate.originalContinueUserActivityCalled).to(beFalse())
+            }
+
+            it("swizzles scene(_:continueUserActivity:) successfully but passes unhandled links to original delegate") {
+                let mockDelegate = MockSceneDelegate()
+                
+                var receivedURL: URL?
+                KindeURLInterceptor.onURLReceived = { url in
+                    receivedURL = url
+                    return false
+                }
+                
+                let originalSelector = #selector(UISceneDelegate.scene(_:continue:))
+                let kindeSelector = #selector(UIResponder.kinde_scene(_:continue:))
+                
+                KindeURLInterceptor.swizzle(originalSelector, on: type(of: mockDelegate), with: kindeSelector, dummySelector: #selector(UIResponder.kinde_dummy_void)) {}
+                
+                let testURL = URL(string: "https://yourdomain.kinde.com/scene-other-callback")!
                 
                 let userActivity = NSUserActivity(activityType: NSUserActivityTypeBrowsingWeb)
                 userActivity.webpageURL = testURL
